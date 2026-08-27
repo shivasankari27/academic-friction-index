@@ -1,0 +1,3 @@
+"""
+Invisible Friction Index Package
+"""
