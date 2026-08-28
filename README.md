@@ -91,6 +91,37 @@ This project currently uses student survey metrics as proxy inputs for academic 
 
 ---
 
+## Real Timetable Data Integration (Future Roadmap / TODO)
+
+> **Tracked Follow-up:** Moving from proxy survey signals (`studytime`, `absences`, `goout`) to direct institutional Student Information System (SIS), Enterprise Resource Planning (ERP), and Learning Management System (LMS) data feeds (e.g., Canvas, Blackboard, Ellucian Banner, Workday Student).
+
+### 1. Ingestion Schemas & Data Feeds
+Real-world deployment requires ingesting raw tabular or API feeds structured across three primary domains:
+
+- **Course Schedule Feeds (`course_schedule.csv` / SIS API):**
+  - Fields: `student_id` (hashed/anonymized), `course_id`, `section_id`, `day_of_week`, `start_time`, `end_time`, `building_id`, `room_id`.
+  - Derived signals: Precise back-to-back class transitions, inter-building transit gaps, daily lecture hour compression.
+
+- **Assessment & Deadline Feeds (`assessments.json` / LMS API):**
+  - Fields: `course_id`, `assignment_id`, `due_timestamp`, `assessment_type` (exam, project, quiz), `estimated_effort_hours`.
+  - Derived signals: Cross-course deadline clustering within 24h / 48h windows (`deadline_density`).
+
+- **Campus Logistics & Spatial Buffers (`campus_transit.csv`):**
+  - Fields: `origin_building`, `destination_building`, `walking_time_minutes`.
+  - Derived signals: Physical friction / transit overload between consecutive classes (`room_buffer_min`).
+
+### 2. Privacy & FERPA Compliance Considerations
+- **Student Privacy & PII Stripping:** All individual identifiers (`student_id`, names, email addresses) must be cryptographically hashed or stripped prior to feature engineering. Analysis is performed strictly at the **course/cohort/schedule pattern level**, never for individual surveillance.
+- **Aggregation Thresholds:** To prevent re-identification in small seminars, metrics are suppressed for course sections with enrollment $< 10$ students.
+- **Data Governance:** Compliance with FERPA (Family Educational Rights and Privacy Act) and GDPR guidelines for educational records, ensuring data is stored in encrypted, institutionally managed data stores with strict access logging.
+
+### 3. Implementation Steps
+1. Define a standardized JSON/CSV schema contract for SIS/LMS exports.
+2. Replace proxy signals in `src/friction_engine.py` with direct timetable calculations (e.g., total weekly lecture compression, transit buffer deficit, 48h deadline clustering).
+3. Implement automated connectors/ETL pipelines for institutional data lake ingestion.
+
+---
+
 ## Tech Stack & Verification
 
 - Python 3.12

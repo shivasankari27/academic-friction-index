@@ -1,186 +1,281 @@
+import json
 import os
 import sys
+from typing import Any
+
 import joblib
 import pandas as pd
-import numpy as np
 import streamlit as st
 
 # Add repo root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.friction_engine import (
-    FrictionEngine,
-    validate_dataframe,
     BASELINE_FEATURES,
     FRICTION_COMPONENT_NAMES,
+    FrictionEngine,
+    validate_dataframe,
 )
 
-# --------------------------------------------------
-# PAGE CONFIG
-# --------------------------------------------------
-st.set_page_config(
-    page_title="Invisible Friction Index",
-    layout="wide"
-)
-
-st.title("Invisible Friction Index")
-st.caption("System-level academic design friction — measuring failing academic design, not failing students.")
 
 # --------------------------------------------------
-# LOAD MODEL & ENGINE ARTIFACTS
+# REFACTORED CORE LOGIC FUNCTIONS
 # --------------------------------------------------
 @st.cache_resource
-def load_artifacts():
-    model_path = "models/friction_model.joblib"
-    engine_path = "models/friction_engine.joblib"
-    model = joblib.load(model_path) if os.path.exists(model_path) else None
-    engine = joblib.load(engine_path) if os.path.exists(engine_path) else FrictionEngine()
-    return model, engine
+def load_artifacts(
+    model_path: str = "models/friction_model.joblib",
+    engine_path: str = "models/friction_engine.joblib",
+    metadata_path: str = "models/friction_model_metadata.json",
+) -> tuple[Any | None, FrictionEngine, dict[str, Any] | None]:
+    """
+    Loads model, friction engine, and companion metadata JSON.
+    Handles missing or corrupt artifact paths gracefully.
+    """
+    model = None
+    engine = None
+    metadata = None
 
-model, engine = load_artifacts()
+    if os.path.exists(model_path):
+        try:
+            model = joblib.load(model_path)
+        except (OSError, ValueError, TypeError, KeyError):
+            model = None
 
-# --------------------------------------------------
-# DATA UPLOAD / DEMO DATASET SELECTION
-# --------------------------------------------------
-st.sidebar.header("Data Selection")
-use_demo = st.sidebar.button("Load Demo Dataset (student-mat.csv)")
-uploaded_file = st.sidebar.file_uploader("Or Upload Custom CSV", type=["csv"])
-
-df_raw = None
-
-if uploaded_file is not None:
-    try:
-        df_raw = pd.read_csv(uploaded_file, sep=None, engine="python")
-    except Exception as e:
-        st.error(f"Error reading uploaded file: {e}")
-elif use_demo or True:  # Default fallback
-    if os.path.exists("data/raw/student-mat.csv"):
-        df_raw = pd.read_csv("data/raw/student-mat.csv")
+    if os.path.exists(engine_path):
+        try:
+            engine = joblib.load(engine_path)
+        except (OSError, ValueError, TypeError, KeyError):
+            engine = FrictionEngine()
     else:
-        st.info("Please upload a CSV file with student/schedule data to proceed.")
+        engine = FrictionEngine()
 
-if df_raw is not None:
-    # Validate Schema
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            metadata = None
+
+    return model, engine, metadata
+
+
+def run_inference(
+    df_raw: pd.DataFrame,
+    engine: FrictionEngine,
+    model: Any | None = None,
+) -> tuple[pd.DataFrame | None, bool, list]:
+    """
+    Validates input DataFrame schema, transforms it using FrictionEngine,
+    and runs model inference if model is available.
+    """
     is_valid, missing_cols = validate_dataframe(df_raw)
     if not is_valid:
-        st.error(
-            f"❌ Uploaded dataset is missing required columns: {', '.join(missing_cols)}.\n"
-            "Please upload a dataset that matches the required schema."
-        )
-    else:
-        # Transform dataframe using persisted engine scaler & calibrated thresholds
-        df = engine.transform(df_raw)
+        return None, False, missing_cols
 
-        # Model Prediction if model exists
-        if model is not None:
+    # Transform dataframe using persisted engine scaler & calibrated thresholds
+    df = engine.transform(df_raw)
+
+    # Model Prediction if model exists
+    if model is not None:
+        try:
             X_infer = df[BASELINE_FEATURES + ["friction_index"]]
             df["predicted_failure_prob"] = model.predict_proba(X_infer)[:, 1]
+        except (ValueError, KeyError, AttributeError):
+            pass
 
-        # --------------------------------------------------
-        # SYSTEM-LEVEL DASHBOARD
-        # --------------------------------------------------
-        st.subheader("System-Level Friction Summary")
+    return df, True, []
 
-        avg_friction = round(df["friction_index"].mean(), 3)
-        band_pct = df["risk_band"].value_counts(normalize=True) * 100
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Average Friction Index", avg_friction)
-        c2.metric("Unsafe (%)", f"{round(band_pct.get('🔴 Unsafe', 0), 1)}%")
-        c3.metric("Warning (%)", f"{round(band_pct.get('🟡 Warning', 0), 1)}%")
-        if "predicted_failure_prob" in df.columns:
-            avg_pred = round(df["predicted_failure_prob"].mean() * 100, 1)
-            c4.metric("Predicted Failure Risk (%)", f"{avg_pred}%")
+def compute_summary_metrics(df: pd.DataFrame) -> dict[str, Any]:
+    """
+    Computes summary metrics for display on dashboard.
+    """
+    avg_friction = round(float(df["friction_index"].mean()), 3)
+    band_pct = (df["risk_band"].value_counts(normalize=True) * 100).to_dict()
+
+    unsafe_pct = round(float(band_pct.get("🔴 Unsafe", 0.0)), 1)
+    warning_pct = round(float(band_pct.get("🟡 Warning", 0.0)), 1)
+    survivable_pct = round(float(band_pct.get("🟢 Survivable", 0.0)), 1)
+
+    avg_pred_risk = None
+    if "predicted_failure_prob" in df.columns:
+        avg_pred_risk = round(float(df["predicted_failure_prob"].mean()) * 100, 1)
+
+    return {
+        "avg_friction": avg_friction,
+        "unsafe_pct": unsafe_pct,
+        "warning_pct": warning_pct,
+        "survivable_pct": survivable_pct,
+        "avg_pred_risk": avg_pred_risk,
+    }
+
+
+def main():
+    # --------------------------------------------------
+    # PAGE CONFIG
+    # --------------------------------------------------
+    st.set_page_config(
+        page_title="Invisible Friction Index",
+        layout="wide"
+    )
+
+    st.title("Invisible Friction Index")
+    st.caption("System-level academic design friction — measuring failing academic design, not failing students.")
+
+    # --------------------------------------------------
+    # LOAD MODEL & ENGINE ARTIFACTS
+    # --------------------------------------------------
+    model, engine, metadata = load_artifacts()
+
+    # --------------------------------------------------
+    # DATA UPLOAD / DEMO DATASET SELECTION
+    # --------------------------------------------------
+    st.sidebar.header("Data Selection")
+    use_demo = st.sidebar.button("Load Demo Dataset (student-mat.csv)")
+    uploaded_file = st.sidebar.file_uploader("Or Upload Custom CSV", type=["csv"])
+
+    df_raw = None
+
+    if uploaded_file is not None:
+        try:
+            df_raw = pd.read_csv(uploaded_file, sep=None, engine="python")
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+            st.error(f"Error reading uploaded file: {e}")
+    elif use_demo:
+        if os.path.exists("data/raw/student-mat.csv"):
+            df_raw = pd.read_csv("data/raw/student-mat.csv")
         else:
-            c4.metric("Survivable (%)", f"{round(band_pct.get('🟢 Survivable', 0), 1)}%")
+            st.info("Please upload a CSV file with student/schedule data to proceed.")
+    else:
+        st.info("Upload a CSV file or click 'Load Demo Dataset (student-mat.csv)' to analyze friction.")
 
-        st.divider()
-
-        # --------------------------------------------------
-        # RISK DISTRIBUTION CHART
-        # --------------------------------------------------
-        st.subheader("Friction Risk Distribution")
-
-        chart_df = (
-            df["risk_band"]
-            .value_counts()
-            .reindex(["🟢 Survivable", "🟡 Warning", "🔴 Unsafe"])
-            .fillna(0)
-        )
-
-        st.bar_chart(chart_df)
-
-        st.divider()
-
-        # --------------------------------------------------
-        # DESIGN FIX SUGGESTIONS
-        # --------------------------------------------------
-        st.subheader("Design-Level Fix Suggestions")
-
-        mean_components = df[FRICTION_COMPONENT_NAMES].mean()
-        top_issue = mean_components.idxmax()
-
-        if top_issue == "back_to_back_score":
-            st.warning(
-                "High back-to-back intensity detected. "
-                "Insert 15–30 minute buffer gaps between sessions."
-            )
-        elif top_issue == "deadline_density":
-            st.warning(
-                "Deadline clustering & daily workload density detected. "
-                "Spread assessments across weeks instead of stacking them."
-            )
-        elif top_issue == "temporal_rigidity":
-            st.warning(
-                "Early + late scheduling rigidity detected. "
-                "Introduce flexible start times or protected recovery windows."
+    if df_raw is not None:
+        df, is_valid, missing_cols = run_inference(df_raw, engine, model)
+        if not is_valid:
+            st.error(
+                f"❌ Uploaded dataset is missing required columns: {', '.join(missing_cols)}.\n"
+                "Please upload a dataset that matches the required schema."
             )
         else:
-            st.warning(
-                "High daily schedule density detected. "
-                "Reduce overall daily course compression to preserve cognitive energy."
+            metrics = compute_summary_metrics(df)
+
+            # --------------------------------------------------
+            # SYSTEM-LEVEL DASHBOARD
+            # --------------------------------------------------
+            st.subheader("System-Level Friction Summary")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Average Friction Index", metrics["avg_friction"])
+            c2.metric("Unsafe (%)", f"{metrics['unsafe_pct']}%")
+            c3.metric("Warning (%)", f"{metrics['warning_pct']}%")
+            if metrics["avg_pred_risk"] is not None:
+                c4.metric("Predicted Failure Risk (%)", f"{metrics['avg_pred_risk']}%")
+            else:
+                c4.metric("Survivable (%)", f"{metrics['survivable_pct']}%")
+
+            st.divider()
+
+            # --------------------------------------------------
+            # RISK DISTRIBUTION CHART
+            # --------------------------------------------------
+            st.subheader("Friction Risk Distribution")
+
+            chart_df = (
+                df["risk_band"]
+                .value_counts()
+                .reindex(["🟢 Survivable", "🟡 Warning", "🔴 Unsafe"])
+                .fillna(0)
             )
 
-        st.divider()
+            st.bar_chart(chart_df)
 
-        # --------------------------------------------------
-        # DATA PREVIEW
-        # --------------------------------------------------
-        st.subheader("Sample System Friction Analysis")
+            st.divider()
 
-        cols_to_show = ["studytime", "absences", "friction_index", "risk_band"]
-        if "predicted_failure_prob" in df.columns:
-            cols_to_show.append("predicted_failure_prob")
+            # --------------------------------------------------
+            # DESIGN FIX SUGGESTIONS
+            # --------------------------------------------------
+            st.subheader("Design-Level Fix Suggestions")
 
-        st.dataframe(
-            df[cols_to_show].head(10),
-            use_container_width=True,
-        )
+            mean_components = df[FRICTION_COMPONENT_NAMES].mean()
+            top_issue = mean_components.idxmax()
 
-        st.divider()
+            if top_issue == "back_to_back_score":
+                st.warning(
+                    "High back-to-back intensity detected. "
+                    "Insert 15–30 minute buffer gaps between sessions."
+                )
+            elif top_issue == "deadline_density":
+                st.warning(
+                    "Deadline clustering & daily workload density detected. "
+                    "Spread assessments across weeks instead of stacking them."
+                )
+            elif top_issue == "temporal_rigidity":
+                st.warning(
+                    "Early + late scheduling rigidity detected. "
+                    "Introduce flexible start times or protected recovery windows."
+                )
+            else:
+                st.warning(
+                    "High daily schedule density detected. "
+                    "Reduce overall daily course compression to preserve cognitive energy."
+                )
 
-        # --------------------------------------------------
-        # MODEL CARD & LIMITATIONS
-        # --------------------------------------------------
-        with st.expander("📄 Model Card, Calibrated Thresholds & Scope"):
-            st.markdown(
-                f"""
-                **Calibrated Thresholds:**
-                - Low Risk threshold (Survivable / Warning): `{engine.threshold_low:.3f}`
-                - High Risk threshold (Warning / Unsafe): `{engine.threshold_high:.3f}`
+            st.divider()
 
-                **What this model measures:**
-                - Academic design friction derived from schedule and workload proxies.
-                - System-imposed stress, not student behavior.
+            # --------------------------------------------------
+            # DATA PREVIEW
+            # --------------------------------------------------
+            st.subheader("Sample System Friction Analysis")
 
-                **What this model does NOT do:**
-                - No mental health diagnosis.
-                - No behavioral surveillance.
-                - No student labeling or grading decisions.
+            cols_to_show = ["studytime", "absences", "friction_index", "risk_band"]
+            if "predicted_failure_prob" in df.columns:
+                cols_to_show.append("predicted_failure_prob")
 
-                **Intended users:**
-                - Timetable designers
-                - Academic planners
-                - Institutional policy teams
-                """
+            st.dataframe(
+                df[cols_to_show].head(10),
+                use_container_width=True,
             )
+
+            st.divider()
+
+            # --------------------------------------------------
+            # MODEL CARD & LIMITATIONS
+            # --------------------------------------------------
+            with st.expander("📄 Model Card, Calibrated Thresholds & Scope"):
+                meta_info = ""
+                if metadata is not None:
+                    meta_info = f"""
+                    **Model Metadata:**
+                    - Version: `{metadata.get('version', 'N/A')}`
+                    - Model Type: `{metadata.get('model_type', 'N/A')}`
+                    - Training Date: `{metadata.get('training_date', 'N/A')}`
+                    - Best CV AUC: `{metadata.get('best_cv_auc', 'N/A')}`
+                    """
+
+                st.markdown(
+                    f"""
+                    **Calibrated Thresholds:**
+                    - Low Risk threshold (Survivable / Warning): `{engine.threshold_low:.3f}`
+                    - High Risk threshold (Warning / Unsafe): `{engine.threshold_high:.3f}`
+
+                    {meta_info}
+
+                    **What this model measures:**
+                    - Academic design friction derived from schedule and workload proxies.
+                    - System-imposed stress, not student behavior.
+
+                    **What this model does NOT do:**
+                    - No mental health diagnosis.
+                    - No behavioral surveillance.
+                    - No student labeling or grading decisions.
+
+                    **Intended users:**
+                    - Timetable designers
+                    - Academic planners
+                    - Institutional policy teams
+                    """
+                )
+
+
+if __name__ == "__main__":
+    main()

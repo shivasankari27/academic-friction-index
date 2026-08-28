@@ -1,7 +1,13 @@
-import pytest
-import pandas as pd
 import numpy as np
-from src.friction_engine import FrictionEngine, validate_dataframe
+import pandas as pd
+import pytest
+
+from src.friction_engine import (
+    FRICTION_COMPONENT_NAMES,
+    FrictionEngine,
+    compute_raw_friction_components,
+    validate_dataframe,
+)
 
 
 @pytest.fixture
@@ -59,3 +65,55 @@ def test_risk_band_assignment():
     assert engine.assign_risk_band(0.20) == "🟢 Survivable"
     assert engine.assign_risk_band(0.50) == "🟡 Warning"
     assert engine.assign_risk_band(0.80) == "🔴 Unsafe"
+
+
+# Edge Case Tests for compute_raw_friction_components and FrictionEngine
+def test_compute_raw_friction_missing_columns():
+    df_missing = pd.DataFrame({
+        "studytime": [1, 2],
+        "absences": [0, 5],
+    })
+    with pytest.raises(ValueError, match="DataFrame missing required proxy columns"):
+        compute_raw_friction_components(df_missing)
+
+
+def test_compute_raw_friction_nan_values():
+    df_nan = pd.DataFrame({
+        "studytime": [1, np.nan, 3, 4],
+        "absences": [0, 4, np.nan, 20],
+        "goout": [1, np.nan, 4, 5],
+        "Dalc": [1, 1, np.nan, 5],
+        "Walc": [1, 2, 3, np.nan],
+    })
+    res = compute_raw_friction_components(df_nan)
+    assert not res.isnull().values.any()
+    assert len(res) == 4
+    for col in FRICTION_COMPONENT_NAMES:
+        assert col in res.columns
+
+
+def test_compute_raw_friction_out_of_range_and_strings():
+    df_strings = pd.DataFrame({
+        "studytime": ["1", "2", "-5", "invalid"],
+        "absences": [0, -10, 10, "99"],
+        "goout": [1, 2, 4, 5],
+        "Dalc": [1, 1, 2, 5],
+        "Walc": [1, 2, 3, 5],
+    })
+    res = compute_raw_friction_components(df_strings)
+    assert not res.isnull().values.any()
+    assert (res["schedule_density"] >= 0).all()
+
+
+def test_compute_raw_friction_empty_dataframe():
+    df_empty = pd.DataFrame(columns=["studytime", "absences", "goout", "Dalc", "Walc"])
+    res = compute_raw_friction_components(df_empty)
+    assert res.empty
+    assert list(res.columns) == FRICTION_COMPONENT_NAMES
+
+
+def test_engine_fit_empty_dataframe_raises():
+    df_empty = pd.DataFrame(columns=["studytime", "absences", "goout", "Dalc", "Walc", "age", "Medu", "Fedu", "traveltime", "freetime"])
+    engine = FrictionEngine()
+    with pytest.raises(ValueError, match="Cannot fit FrictionEngine on an empty DataFrame"):
+        engine.fit(df_empty)

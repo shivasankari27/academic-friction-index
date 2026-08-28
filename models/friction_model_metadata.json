@@ -1,0 +1,34 @@
+{
+    "version": "v1.0.0-55eb0f2",
+    "training_date": "2026-08-28 06:13:52 UTC",
+    "model_type": "LogisticRegression",
+    "best_cv_auc": 0.5884,
+    "feature_list": [
+        "age",
+        "Medu",
+        "Fedu",
+        "traveltime",
+        "freetime",
+        "friction_index"
+    ],
+    "benchmark_results": {
+        "LogisticRegression": {
+            "base_auc_mean": 0.5907,
+            "base_auc_std": 0.0438,
+            "friction_auc_mean": 0.5884,
+            "friction_auc_std": 0.0407
+        },
+        "RandomForestClassifier": {
+            "base_auc_mean": 0.5133,
+            "base_auc_std": 0.0376,
+            "friction_auc_mean": 0.5055,
+            "friction_auc_std": 0.0313
+        },
+        "GradientBoostingClassifier": {
+            "base_auc_mean": 0.4778,
+            "base_auc_std": 0.0182,
+            "friction_auc_mean": 0.5148,
+            "friction_auc_std": 0.0688
+        }
+    }
+}
