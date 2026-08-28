@@ -20,8 +20,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest joblib
+          pip install -r requirements.txt
 
-      - name: Run tests
+      - name: Lint with ruff
         run: |
-          PYTHONPATH=. python -m pytest tests/
+          ruff check .
+
+      - name: Type check with mypy
+        run: |
+          mypy --ignore-missing-imports src/
+
+      - name: Run tests with coverage
+        run: |
+          PYTHONPATH=. python -m pytest --cov=src --cov=app --cov-fail-under=80 tests/

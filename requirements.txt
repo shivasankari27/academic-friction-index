@@ -6,3 +6,6 @@ seaborn==0.13.2
 streamlit==1.40.0
 joblib==1.4.2
 pytest==8.3.3
+ruff==0.16.5
+mypy==2.3.1
+pytest-cov==7.1.0
